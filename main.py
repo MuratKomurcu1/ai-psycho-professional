@@ -14,8 +14,6 @@ from openai import OpenAI
 # OpenAI client
 openai_client = None
 
-
-
 # Korumalı prompt sistemi
 def get_system_prompts():
     """Şifrelenmiş sistem promptları"""
@@ -41,18 +39,25 @@ def openai_baslat():
     """OpenAI client'ı başlat"""
     global openai_client
     
-    # Streamlit Secrets veya environment variable'dan API key al
+    # .env dosyasını yükle (eğer varsa)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # dotenv yoksa devam et
+    
+    # API key alma öncelik sırası: .env > Streamlit secrets > environment
     api_key = None
     
-    # 1. Streamlit secrets'tan dene
-    try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-    except:
-        pass
+    # 1. .env dosyasından dene
+    api_key = os.getenv("OPENAI_API_KEY")
     
-    # 2. Environment variable'dan dene
+    # 2. Streamlit secrets'tan dene (fallback)
     if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
+        try:
+            api_key = st.secrets["OPENAI_API_KEY"]
+        except:
+            pass
     
     if api_key:
         try:
@@ -61,6 +66,8 @@ def openai_baslat():
         except Exception as e:
             st.error(f"OpenAI client hatası: {e}")
             return False
+    else:
+        st.error("❌ OpenAI API anahtarı bulunamadı! Lütfen .env dosyasında OPENAI_API_KEY tanımlayın.")
     return False
 
 def metinden_sese_openai(metin):
@@ -258,7 +265,7 @@ def parse_klinik_analiz(analiz_metni):
         # Ana bölümleri parse et
         line_upper = line.upper()
         
-        if 'KLINIK_TANI:' in line_upper or 'TANI:' in line_upper:
+        if 'KLİNİK_TANI:' in line_upper or 'TANI:' in line_upper:
             analiz_sonucu["klinik_tani"] = line.split(':', 1)[1].strip() if ':' in line else ""
         elif 'SEMPTOM' in line_upper and ':' in line:
             analiz_sonucu["semptom_profili"] = line.split(':', 1)[1].strip()
@@ -271,7 +278,7 @@ def parse_klinik_analiz(analiz_metni):
                 pass
         elif 'RUH' in line_upper and ':' in line:
             analiz_sonucu["ruh_hali"] = line.split(':', 1)[1].strip().lower()
-        elif 'TEDAVI' in line_upper and ':' in line:
+        elif 'TEDAVİ' in line_upper and ':' in line:
             analiz_sonucu["tedavi_plani"] = line.split(':', 1)[1].strip()
         elif 'PROGNOZ' in line_upper and ':' in line:
             analiz_sonucu["prognoz"] = line.split(':', 1)[1].strip()
@@ -473,7 +480,7 @@ def problem_tanımlama():
 
 def seans_yonetim():
     """5 dakikalık seans yönetimi"""
-
+    
     # Seans başlangıç kontrolü
     if "seans_baslangic_zamani" not in st.session_state:
         st.session_state.seans_baslangic_zamani = datetime.now()
@@ -508,13 +515,106 @@ def seans_yonetim():
     progress = (st.session_state.konusma_sayisi + 1) / 5
     st.progress(progress, f"Değerlendirme Aşaması: {st.session_state.konusma_sayisi + 1}/5")
     
-    # Konuşmayı kaydet
+    # Streamlit session başlangıçlarını garantiye al
+    if "kullanici_konusma_sirasi" not in st.session_state:
+        st.session_state.kullanici_konusma_sirasi = True
+
+    if "konusma_sayisi" not in st.session_state:
+        st.session_state.konusma_sayisi = 0
+
+    if "seans_konusmalari" not in st.session_state:
+        st.session_state.seans_konusmalari = []
+
+    if st.session_state.kullanici_konusma_sirasi:
+        st.markdown("### ✍️ Yanıtınızı Yazın")
+        st.info("💡 **İpucu:** Samimi ve açık bir dille yazın.")
+
+        with st.form(f"konusma_formu_{st.session_state.konusma_sayisi}"):
+            kullanici_mesaji = st.text_area(
+                "💭 Düşüncelerinizi paylaşın:",
+                placeholder="Bu konuda ne düşünüyorsunuz?",
+                height=120,
+                key=f"mesaj_{st.session_state.konusma_sayisi}"
+            )
+
+            konusma_gonder = st.form_submit_button("📤 Gönder")
+
+            if konusma_gonder:
+                if len(kullanici_mesaji.strip()) < 10:
+                    st.error("Lütfen daha detaylı bir yanıt verin")
+                    st.stop()
+
+                st.session_state.mevcut_kullanici_konusma = kullanici_mesaji
+                st.session_state.kullanici_konusma_sirasi = False
+                st.rerun()
+
+    else:
+        st.markdown("### 🤖 Dr. Marcus Reed Değerlendirme Yapıyor")
+
+        if "ai_cevap_uretti" not in st.session_state:
+            with st.spinner("🧠 Klinik analiz hazırlanıyor..."):
+                ai_cevap_uret()
+
+            st.session_state.ai_cevap_uretti = True
+
+        if st.button("➡️ Bir Sonraki Aşama", use_container_width=True, type="primary"):
+            st.session_state.kullanici_konusma_sirasi = True
+            st.session_state.konusma_sayisi += 1
+            del st.session_state.ai_cevap_uretti
+            st.rerun()
+
+    # Geçmiş konuşmaları göster
+    if st.session_state.seans_konusmalari:
+        st.markdown("### 📋 Değerlendirme Süreci")
+        for i, konusma in enumerate(reversed(st.session_state.seans_konusmalari[-2:])):
+            with st.expander(f"🔍 Aşama {len(st.session_state.seans_konusmalari)-i}", expanded=(i == 0)):
+                st.markdown(f"**👤 Siz:** {konusma['kullanici']}")
+                st.markdown(f"**🧠 Dr. Marcus Reed:** {konusma['ai']}")
+
+def ai_cevap_uret():
+    """AI'ın korumalı cevap üretmesi"""
+    if "mevcut_kullanici_konusma" not in st.session_state:
+        st.warning("❗ Kullanıcı konuşması bulunamadı.")
+        return
+
+    if "mevcut_problem" not in st.session_state:
+        st.warning("❗ Problem tanımlanmadan değerlendirme yapılamaz.")
+        return
+
+    kullanici_metni = st.session_state.mevcut_kullanici_konusma
+    problem_bilgisi = st.session_state.mevcut_problem
+    konusma_gecmisi = st.session_state.seans_konusmalari
+
+    # AI cevap üret
+    ai_cevabi = ai_psikolog_cevap_uret(
+        kullanici_metni,
+        problem_bilgisi,
+        konusma_gecmisi,
+        st.session_state.konusma_sayisi
+    )
+
+    st.success("🧠 **DR. MARCUS REED'DEN PROFESYONEL GÖRÜŞ:**")
+    st.markdown(f"*{ai_cevabi}*")
+
+    # Sesli yanıt
+    try:
+        with st.spinner("🔊 Dr. Marcus Reed seslendiriyor..."):
+            ses_baytlari = metinden_sese_openai(ai_cevabi)
+            if ses_baytlari:
+                ses_baytlarini_cal(ses_baytlari)
+                st.success("🎵 Sesli yanıt hazır!")
+            else:
+                st.info("📝 Yazılı yanıt hazır")
+    except Exception as e:
+        st.warning(f"Ses hatası: {e}")
+
+    # Konuşma kaydet
     st.session_state.seans_konusmalari.append({
         "kullanici": kullanici_metni,
         "ai": ai_cevabi,
         "zaman": datetime.now().isoformat()
     })
-    
+
     del st.session_state.mevcut_kullanici_konusma
 
 def seans_analiz_goster():
@@ -645,54 +745,6 @@ def seans_sifirla():
     for key in keys_to_remove:
         if key in st.session_state:
             del st.session_state[key]
-
-def ai_cevap_uret():
-    if "mevcut_kullanici_konusma" not in st.session_state:
-        st.warning("❗ Kullanıcı konuşması bulunamadı.")
-        return
-
-    if "mevcut_problem" not in st.session_state:
-        st.warning("❗ Problem tanımlanmadan değerlendirme yapılamaz.")
-        return
-    """AI'ın korumalı cevap üretmesi"""
-    if "mevcut_kullanici_konusma" not in st.session_state:
-        return
-
-    kullanici_metni = st.session_state.mevcut_kullanici_konusma
-    problem_bilgisi = st.session_state.mevcut_problem
-    konusma_gecmisi = st.session_state.seans_konusmalari
-
-    # AI cevap üret
-    ai_cevabi = ai_psikolog_cevap_uret(
-        kullanici_metni,
-        problem_bilgisi,
-        konusma_gecmisi,
-        st.session_state.konusma_sayisi
-    )
-
-    st.success("🧠 **DR. MARCUS REED'DEN PROFESYONEL GÖRÜŞ:**")
-    st.markdown(f"*{ai_cevabi}*")
-
-    # Sesli yanıt
-    try:
-        with st.spinner("🔊 Dr. Marcus Reed seslendiriyor..."):
-            ses_baytlari = metinden_sese_openai(ai_cevabi)
-            if ses_baytlari:
-                ses_baytlarini_cal(ses_baytlari)
-                st.success("🎵 Sesli yanıt hazır!")
-            else:
-                st.info("📝 Yazılı yanıt hazır")
-    except Exception as e:
-        st.warning(f"Ses hatası: {e}")
-
-    # Konuşma kaydet
-    st.session_state.seans_konusmalari.append({
-        "kullanici": kullanici_metni,
-        "ai": ai_cevabi,
-        "zaman": datetime.now().isoformat()
-    })
-
-    del st.session_state.mevcut_kullanici_konusma
 
 def kullanici_profil():
     """Kullanıcı profili"""
@@ -876,60 +928,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    # Session başlangıçlarını garantiye al
-    if "kullanici_konusma_sirasi" not in st.session_state:
-        st.session_state.kullanici_konusma_sirasi = True
-
-    if "konusma_sayisi" not in st.session_state:
-        st.session_state.konusma_sayisi = 0
-
-    if "seans_konusmalari" not in st.session_state:
-        st.session_state.seans_konusmalari = []
-
-    if st.session_state.kullanici_konusma_sirasi:
-        st.markdown("### ✍️ Yanıtınızı Yazın")
-        st.info("💡 **İpucu:** Samimi ve açık bir dille yazın.")
-
-        with st.form(f"konusma_formu_{st.session_state.konusma_sayisi}"):
-            kullanici_mesaji = st.text_area(
-                "💭 Düşüncelerinizi paylaşın:",
-                placeholder="Bu konuda ne düşünüyorsunuz?",
-                height=120,
-                key=f"mesaj_{st.session_state.konusma_sayisi}"
-            )
-
-            konusma_gonder = st.form_submit_button("📤 Gönder")
-
-            if konusma_gonder:
-                if len(kullanici_mesaji.strip()) < 10:
-                    st.error("Lütfen daha detaylı bir yanıt verin")
-                    st.stop()
-
-                st.session_state.mevcut_kullanici_konusma = kullanici_mesaji
-                st.session_state.kullanici_konusma_sirasi = False
-                st.rerun()
-
-    else:
-        st.markdown("### 🤖 Dr. Marcus Reed Değerlendirme Yapıyor")
-
-        if "ai_cevap_uretti" not in st.session_state:
-            with st.spinner("🧠 Klinik analiz hazırlanıyor..."):
-                ai_cevap_uret()
-
-            st.session_state.ai_cevap_uretti = True
-
-        if st.button("➡️ Bir Sonraki Aşama", use_container_width=True, type="primary"):
-            st.session_state.kullanici_konusma_sirasi = True
-            st.session_state.konusma_sayisi += 1
-            del st.session_state.ai_cevap_uretti
-            st.rerun()
-
-    if st.session_state.seans_konusmalari:
-        st.markdown("### 📋 Değerlendirme Süreci")
-        for i, konusma in enumerate(reversed(st.session_state.seans_konusmalari[-2:])):
-            with st.expander(f"🔍 Aşama {len(st.session_state.seans_konusmalari)-i}", expanded=(i == 0)):
-                st.markdown(f"**👤 Siz:** {konusma['kullanici']}")
-                st.markdown(f"**🧠 Dr. Marcus Reed:** {konusma['ai']}")
-
-
