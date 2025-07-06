@@ -1,0 +1,30 @@
+# AI-Psycho Professional - Streamlit Uyumlu Gereksinimler
+
+# Ana framework
+streamlit>=1.28.0
+
+# OpenAI API
+openai>=1.0.0
+
+# Temel veri işleme
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Güvenlik
+python-dotenv>=1.0.0
+
+# Tarih/saat işlemleri
+python-dateutil>=2.8.0
+
+# Web requests (opsiyonel)
+requests>=2.31.0
+
+# Streamlit Cloud için optimize edilmiş paketler
+# Not: Ses işleme paketleri Streamlit Cloud'da çalışmayabilir
+# pyaudio, pygame gibi paketler kaldırıldı
+
+# Gelişmiş analiz (opsiyonel)
+plotly>=5.15.0
+
+# Test ortamı için (yerel geliştirme)
+# pytest>=7.4.0
