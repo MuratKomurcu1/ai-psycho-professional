@@ -4,60 +4,34 @@ import os
 from datetime import datetime, timedelta
 import time
 import hashlib
-from pathlib import Path
-import numpy as np
 import base64
 
 # OpenAI import
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except ImportError:
+    st.error("OpenAI paketi yüklenemedi. Requirements.txt kontrol edin.")
+    st.stop()
 
-# OpenAI client
+# Global değişkenler
 openai_client = None
-
-# Korumalı prompt sistemi
-def get_system_prompts():
-    """Şifrelenmiş sistem promptları"""
-    
-    # Base64 ile şifrelenmiş kritik promptlar
-    prompts = {
-        "ilk_seans": "U2VuIERyLiBNYXJjdXMgUmVlZCAtIDIwIHnEsWxsxLFrIGRlbmV5aW1saSBrbGluaWsgcHNpa29sb2csIEpvaG5zIEhvcGtpbnMgbWV6dW51LCAxNSwwMDArIGhhc3RhIHRlZGF2aSBldG1pxZ8sIDMga2l0YWIgeWF6bcSxxZ8gw65ubGkgdXptYW4u",
-        "orta_seans": "T1JUQSBBxZ5BTUEgLSBERVLEsE4gVEXFnkhExLBTIFZFIEFOQUzEsFo6CkfDlFJFVsSwTjogRGFoYSBkZXRheWzEsWtsaW5payBkZcSfZXJsZW5kaXJtZSB5YXAgdmUgdGXFn2hpcyBuZXRsZcWfdGlyLg==",
-        "son_seans": "U09OIEHFnkFNQSAtIEtBUFNBTUxJIFRFxZ5IxLBTIFZFIE3DnERBSEFMRSBQTEFOSToKR8OWUkVWxLBOOiBLZXNpbiB0YW7EsSBrb3kgdmUga2Fwc2FtbMSxIHRlZGF2aSBwbGFuxLEgc3VuLg=="
-    }
-    
-    # Decrypt
-    decoded = {}
-    for key, value in prompts.items():
-        try:
-            decoded[key] = base64.b64decode(value).decode('utf-8')
-        except:
-            decoded[key] = "Fallback prompt for safety"
-    
-    return decoded
 
 def openai_baslat():
     """OpenAI client'ı başlat"""
     global openai_client
     
-    # .env dosyasını yükle (eğer varsa)
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass  # dotenv yoksa devam et
-    
-    # API key alma öncelik sırası: .env > Streamlit secrets > environment
+    # API key alma - Streamlit Cloud uyumlu
     api_key = None
     
-    # 1. .env dosyasından dene
-    api_key = os.getenv("OPENAI_API_KEY")
+    # 1. Streamlit secrets'tan dene
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+    except:
+        pass
     
-    # 2. Streamlit secrets'tan dene (fallback)
+    # 2. Environment variable'dan dene
     if not api_key:
-        try:
-            api_key = st.secrets["OPENAI_API_KEY"]
-        except:
-            pass
+        api_key = os.getenv("OPENAI_API_KEY")
     
     if api_key:
         try:
@@ -67,285 +41,168 @@ def openai_baslat():
             st.error(f"OpenAI client hatası: {e}")
             return False
     else:
-        st.error("❌ OpenAI API anahtarı bulunamadı! Lütfen .env dosyasında OPENAI_API_KEY tanımlayın.")
+        st.error("❌ OpenAI API anahtarı bulunamadı! Lütfen Streamlit Cloud Secrets'da OPENAI_API_KEY ayarlayın.")
     return False
 
-def metinden_sese_openai(metin):
-    """OpenAI TTS ile metin-ses çevirisi"""
-    try:
-        if not openai_client:
-            return None
-            
-        response = openai_client.audio.speech.create(
-            model="tts-1",
-            voice="nova",
-            input=metin,
-            speed=0.9
-        )
-        
-        return response.content
-        
-    except Exception as e:
-        st.error(f"TTS hatası: {e}")
-        return None
-
-def ses_baytlarini_cal(ses_baytlari):
-    """Ses dosyasını çal - Streamlit Share için basitleştirilmiş"""
-    try:
-        gecici_dosya = "ai_psycho_cevap.mp3"
-        with open(gecici_dosya, "wb") as f:
-            f.write(ses_baytlari)
-        
-        # Streamlit'in audio player'ını kullan
-        st.audio(gecici_dosya, format='audio/mp3', start_time=0)
-        
-        # Geçici dosyayı sil
-        try:
-            os.remove(gecici_dosya)
-        except:
-            pass
-        
-        return True
-            
-    except Exception as e:
-        st.error(f"Ses çalma hatası: {e}")
-        return False
-
-def build_secure_prompt(stage, user_input, problem_info, history):
-    """Güvenli prompt oluşturucu - kritik business logic gizli"""
-    
-    # Şifrelenmiş promptları al
-    prompts = get_system_prompts()
-    
-    # Seans aşamasına göre
-    if stage == 0:
-        base_prompt = prompts["ilk_seans"]
-        stage_instructions = "İLK GÖRÜŞME - Güven inşa et ve semptom tespiti yap"
-    elif stage <= 2:
-        base_prompt = prompts["orta_seans"] 
-        stage_instructions = "ORTA AŞAMA - Derin analiz ve diferansiyel tanı"
-    else:
-        base_prompt = prompts["son_seans"]
-        stage_instructions = "SON AŞAMA - Kesin tanı ve tedavi protokolü"
-    
-    # Dinamik prompt birleştirme
-    final_prompt = f"""
-{base_prompt}
-
-{stage_instructions}
-
-HASTA PROFİLİ:
-Problem: {problem_info['metin'][:200]}...
-Geçmiş: {problem_info['terapi_gecmisi']}
-Aciliyet: {problem_info['aciliyet']}
-
-HASTA İFADESİ: "{user_input}"
-
-80-120 kelime profesyonel cevap ver."""
-
-    return final_prompt
+def get_system_prompts():
+    """Sistem promptları"""
+    return {
+        "ilk_seans": "Sen Dr. Marcus Reed - 20 yıllık deneyimli klinik psikolog. Hastayı karşıla, güven kur ve ilk değerlendirmeyi yap.",
+        "orta_seans": "Daha detaylı analiz yap. Semptomları keşfet ve tetikleyici faktörleri araştır.",
+        "son_seans": "Kapsamlı değerlendirme ve tedavi önerileri sun. Klinik rapor hazırla."
+    }
 
 def ai_psikolog_cevap_uret(kullanici_metni, problem_bilgisi, konusma_gecmisi, konusma_sirasi):
-    """Korumalı AI psikolog cevap üretici"""
+    """AI psikolog cevap üretici"""
     try:
         if not openai_client:
-            return "Size destek olmak için buradayım. Bu durumu birlikte çözeceğiz."
+            return "Size destek olmak için buradayım. Bu durumu birlikte ele alabiliriz."
         
-        # Güvenli prompt oluştur
-        secure_prompt = build_secure_prompt(
-            konusma_sirasi, 
-            kullanici_metni, 
-            problem_bilgisi, 
-            konusma_gecmisi
-        )
+        # Prompt hazırla
+        if konusma_sirasi == 0:
+            sistem_prompt = "Sen deneyimli bir klinik psikolog olarak hastayı karşılıyorsun. Empati kur ve güven ver."
+        elif konusma_sirasi <= 2:
+            sistem_prompt = "Daha detaylı değerlendirme yap. Semptomları ve tetikleyici faktörleri araştır."
+        else:
+            sistem_prompt = "Kapsamlı değerlendirme yap ve tedavi önerileri sun."
+        
+        prompt = f"""{sistem_prompt}
+
+Hasta sorunu: {problem_bilgisi['metin'][:200]}
+Terapi geçmişi: {problem_bilgisi['terapi_gecmisi']}
+Aciliyet: {problem_bilgisi['aciliyet']}
+
+Hasta: "{kullanici_metni}"
+
+Profesyonel, empatik ve terapötik cevap ver (60-80 kelime):"""
         
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": secure_prompt}],
-            max_tokens=300,
-            temperature=0.8
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.7
         )
         
         return response.choices[0].message.content.strip()
         
     except Exception as e:
-        st.error(f"AI psikolog cevap hatası: {e}")
-        return "Klinik değerlendirmeme göre, bu semptom profili tedavi edilebilir görünüyor. Size özel bir protokol hazırlayabilirim."
-
-def get_analysis_template():
-    """Şifrelenmiş analiz template'i"""
-    
-    encrypted_template = "UHJvZmVzeW9uZWwga2xpbmlrIGFuYWxpeiBzaXN0ZW1p"
-    
-    try:
-        base_template = base64.b64decode(encrypted_template).decode('utf-8')
-    except:
-        base_template = "Klinik analiz sistemi"
-    
-    return f"""
-{base_template}
-
-KLİNİK RAPOR PROTOKOLÜ:
-- DSM-5 kriterlerine göre değerlendirme
-- Semptom pattern recognition
-- Diferansiyel tanı analizi
-- Evidence-based treatment önerileri
-- Risk assessment ve prognoz
-
-Profesyonel analiz formatında rapor hazırla.
-"""
+        st.error(f"AI cevap hatası: {e}")
+        return "Anlıyorum. Bu durumu daha detaylı ele alalım. Neler hissediyorsunuz?"
 
 def seans_analizi_yap(problem_bilgisi, konusma_gecmisi):
-    """Korumalı klinik analiz sistemi"""
+    """Seans analizi"""
     try:
         if not openai_client:
             return basit_analiz_sonucu()
         
-        # Tüm konuşmaları birleştir
-        tum_konusmalar = ""
-        for konusma in konusma_gecmisi:
-            tum_konusmalar += f"Hasta: {konusma['kullanici']}\nPsikolog: {konusma['ai']}\n\n"
+        # Konuşmaları birleştir
+        konusmalar = ""
+        for k in konusma_gecmisi:
+            konusmalar += f"Hasta: {k['kullanici']}\nPsikolog: {k['ai']}\n\n"
         
-        # Güvenli analiz template
-        analysis_template = get_analysis_template()
-        
-        analiz_prompt = f"""{analysis_template}
+        analiz_prompt = f"""Bu klinik seansı analiz et:
 
-SEANS VERİLERİ:
 Problem: {problem_bilgisi['metin']}
-Şiddet: {problem_bilgisi['aciliyet']}
-Geçmiş: {problem_bilgisi['terapi_gecmisi']}
+Aciliyet: {problem_bilgisi['aciliyet']}
 
-KONUŞMA TRANSKRİPTİ:
-{tum_konusmalar}
+Konuşmalar:
+{konusmalar}
 
-RAPOR FORMATINDA DETAYLI ANALİZ:"""
+Şu formatta analiz yap:
+TANI: [Klinik tanı]
+STRES: [0-10 arası]
+DURUM: [stable/anxious/depressed]
+TEDAVI: [Önerilen yaklaşım]
+ONERILER: [3-4 madde]"""
         
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": analiz_prompt}],
-            max_tokens=800,
+            max_tokens=400,
             temperature=0.3
         )
         
-        analiz_metni = response.choices[0].message.content.strip()
-        return parse_klinik_analiz(analiz_metni)
+        return parse_analiz(response.choices[0].message.content)
         
     except Exception as e:
-        st.error(f"Seans analizi hatası: {e}")
+        st.error(f"Analiz hatası: {e}")
         return basit_analiz_sonucu()
 
-def parse_klinik_analiz(analiz_metni):
-    """Klinik analiz metnini parse et"""
-    analiz_sonucu = {
+def parse_analiz(analiz_metni):
+    """Analiz metnini parse et"""
+    sonuc = {
         "klinik_tani": "",
-        "semptom_profili": "",
-        "mental_status": "",
-        "siddet_degerlendirmesi": "",
-        "etiyoloji": "",
-        "diferansiyel_tani": "",
-        "prognoz": "",
-        "tedavi_plani": "",
-        "takip_protokolu": "",
-        "degerlendirme": "",
-        "oneriler": [],
         "stres_seviyesi": 5,
         "ruh_hali": "stable",
-        "aciliyet": "orta"
+        "tedavi_plani": "",
+        "oneriler": [],
+        "degerlendirme": analiz_metni
     }
     
     lines = analiz_metni.split('\n')
-    current_section = ""
-    
     for line in lines:
         line = line.strip()
-        if not line:
-            continue
-            
-        # Ana bölümleri parse et
-        line_upper = line.upper()
-        
-        if 'KLİNİK_TANI:' in line_upper or 'TANI:' in line_upper:
-            analiz_sonucu["klinik_tani"] = line.split(':', 1)[1].strip() if ':' in line else ""
-        elif 'SEMPTOM' in line_upper and ':' in line:
-            analiz_sonucu["semptom_profili"] = line.split(':', 1)[1].strip()
-        elif 'MENTAL' in line_upper and ':' in line:
-            analiz_sonucu["mental_status"] = line.split(':', 1)[1].strip()
-        elif 'STRES' in line_upper and ':' in line:
+        if line.startswith('TANI:'):
+            sonuc["klinik_tani"] = line.replace('TANI:', '').strip()
+        elif line.startswith('STRES:'):
             try:
-                analiz_sonucu["stres_seviyesi"] = int(line.split(':')[1].strip().split()[0])
+                sonuc["stres_seviyesi"] = int(line.replace('STRES:', '').strip())
             except:
                 pass
-        elif 'RUH' in line_upper and ':' in line:
-            analiz_sonucu["ruh_hali"] = line.split(':', 1)[1].strip().lower()
-        elif 'TEDAVİ' in line_upper and ':' in line:
-            analiz_sonucu["tedavi_plani"] = line.split(':', 1)[1].strip()
-        elif 'PROGNOZ' in line_upper and ':' in line:
-            analiz_sonucu["prognoz"] = line.split(':', 1)[1].strip()
-        elif line.startswith('-') or line.startswith('•'):
-            # Öneriler bölümü
-            oneri = line[1:].strip()
-            if oneri and len(oneri) > 5:
-                analiz_sonucu["oneriler"].append(oneri)
+        elif line.startswith('DURUM:'):
+            sonuc["ruh_hali"] = line.replace('DURUM:', '').strip()
+        elif line.startswith('TEDAVI:'):
+            sonuc["tedavi_plani"] = line.replace('TEDAVI:', '').strip()
+        elif line.startswith('-'):
+            sonuc["oneriler"].append(line[1:].strip())
     
     # Varsayılan değerler
-    if not analiz_sonucu["klinik_tani"]:
-        analiz_sonucu["klinik_tani"] = "Adjustment Disorder with Mixed Anxiety and Depressed Mood (309.28)"
-    
-    if not analiz_sonucu["oneriler"]:
-        analiz_sonucu["oneriler"] = [
-            "Cognitive Behavioral Therapy (KDT) protokolü başlatın",
-            "Mindfulness-based stress reduction teknikleri",
-            "Günlük mood tracking ile semptom monitoring",
-            "Progressive muscle relaxation",
-            "İki hafta sonra follow-up appointment"
+    if not sonuc["klinik_tani"]:
+        sonuc["klinik_tani"] = "Adjustment Disorder (309.9)"
+    if not sonuc["oneriler"]:
+        sonuc["oneriler"] = [
+            "Günlük stres yönetimi teknikleri",
+            "Düzenli egzersiz ve uyku",
+            "Profesyonel destek almayı değerlendirin"
         ]
     
-    if not analiz_sonucu["degerlendirme"]:
-        analiz_sonucu["degerlendirme"] = "Klinik değerlendirme tamamlandı. Hasta collaboration gösterdi ve therapeutic alliance kuruldu."
-        
-    return analiz_sonucu
+    return sonuc
 
 def basit_analiz_sonucu():
-    """API olmadığında basit analiz"""
+    """Basit analiz sonucu"""
     return {
-        "klinik_tani": "Adjustment Disorder (309.9)",
-        "semptom_profili": "Stress-related symptoms, emotional dysregulation",
-        "degerlendirme": "Klinik değerlendirme tamamlandı. Hasta therapeutic engagement gösterdi.",
-        "oneriler": [
-            "KDT based intervention başlatın",
-            "Stress management teknikleri",
-            "Günlük self-monitoring"
-        ],
+        "klinik_tani": "Genel Adaptation Zorluğu",
         "stres_seviyesi": 5,
         "ruh_hali": "stable",
-        "aciliyet": "orta",
-        "tedavi_plani": "Cognitive-behavioral therapy + relaxation training",
-        "prognoz": "Good prognosis"
+        "tedavi_plani": "Supportif terapi ve stres yönetimi",
+        "oneriler": [
+            "Günlük nefes egzersizleri",
+            "Düzenli uyku düzeni",
+            "Sosyal destek sistemini güçlendirin"
+        ],
+        "degerlendirme": "Klinik değerlendirme tamamlandı. Genel adaptasyon zorluğu gözlendi."
     }
 
-# Kullanıcı yönetimi fonksiyonları
+# Kullanıcı yönetimi
 def sifre_hash(sifre):
-    """Şifreyi güvenli şekilde hashle"""
+    """Şifreyi hashle"""
     return hashlib.sha256(sifre.encode()).hexdigest()
 
 def kullanici_veri_yukle(kullanici_adi):
-    """Session state'den kullanıcı verisi yükle"""
+    """Kullanıcı verisi yükle"""
     if "kullanici_verileri" not in st.session_state:
         st.session_state.kullanici_verileri = {}
-    
     return st.session_state.kullanici_verileri.get(kullanici_adi, None)
 
 def kullanici_veri_kaydet(kullanici_adi, veri):
-    """Session state'e kullanıcı verisi kaydet"""
+    """Kullanıcı verisi kaydet"""
     if "kullanici_verileri" not in st.session_state:
         st.session_state.kullanici_verileri = {}
-    
     st.session_state.kullanici_verileri[kullanici_adi] = veri
     return True
 
 def kullanici_kayit():
-    """Yeni kullanıcı kaydı"""
+    """Kullanıcı kaydı"""
     st.markdown("### 📝 Yeni Hesap Oluştur")
     
     with st.form("kayit_formu"):
@@ -359,35 +216,27 @@ def kullanici_kayit():
             if len(kullanici_adi) < 3:
                 st.error("Kullanıcı adı en az 3 karakter olmalı!")
                 return
-            
             if len(sifre) < 6:
                 st.error("Şifre en az 6 karakter olmalı!")
                 return
-                
             if sifre != sifre_tekrar:
                 st.error("Şifreler eşleşmiyor!")
                 return
             
-            # Kullanıcı zaten var mı kontrol et
             if kullanici_veri_yukle(kullanici_adi):
                 st.error("Bu kullanıcı adı zaten alınmış!")
                 return
             
-            # Yeni kullanıcı verisi
             kullanici_data = {
                 "kullanici_adi": kullanici_adi,
                 "sifre_hash": sifre_hash(sifre),
                 "kayit_tarihi": datetime.now().isoformat(),
                 "seanslar": [],
-                "profil": {
-                    "toplam_seans": 0,
-                    "son_giris": None
-                }
+                "profil": {"toplam_seans": 0, "son_giris": None}
             }
             
             kullanici_veri_kaydet(kullanici_adi, kullanici_data)
-            st.success("✅ Hesap başarıyla oluşturuldu! Giriş yapabilirsiniz.")
-            st.session_state.show_login = True
+            st.success("✅ Hesap başarıyla oluşturuldu!")
             st.rerun()
 
 def kullanici_giris():
@@ -411,12 +260,10 @@ def kullanici_giris():
                 st.error("Yanlış şifre!")
                 return
             
-            # Giriş başarılı
             st.session_state.kullanici_adi = kullanici_adi
             st.session_state.kullanici_data = kullanici_data
             st.session_state.giris_yapildi = True
             
-            # Son giriş tarihini güncelle
             kullanici_data["profil"]["son_giris"] = datetime.now().isoformat()
             kullanici_veri_kaydet(kullanici_adi, kullanici_data)
             
@@ -424,7 +271,7 @@ def kullanici_giris():
             st.rerun()
 
 def problem_tanımlama():
-    """Kullanıcının problemini yazılı olarak ifade etmesi"""
+    """Problem tanımlama"""
     st.markdown("### 🎯 AI-Psycho ile Profesyonel Değerlendirme")
     
     st.success("""
@@ -433,11 +280,6 @@ def problem_tanımlama():
     🎓 Dr. Marcus Reed AI protokolü ile çalışıyorum
     
     💫 5 dakikalık seansınız sonunda kapsamlı klinik rapor alacaksınız
-    """)
-    
-    # Streamlit Share için uyarı
-    st.info("""
-    📝 **DEMO SÜRÜMÜ:** Bu versiyonda yazılı konuşma kullanılmaktadır.
     """)
     
     with st.form("problem_formu"):
@@ -464,7 +306,6 @@ def problem_tanımlama():
                 st.error("⚠️ Daha detaylı açıklama yapmanız değerlendirme kalitesini artıracaktır")
                 return
             
-            # Problem verisini session state'e kaydet
             st.session_state.mevcut_problem = {
                 "metin": problem_metni,
                 "terapi_gecmisi": daha_once_terapi,
@@ -474,30 +315,26 @@ def problem_tanımlama():
             
             st.session_state.seans_asamasi = "seans_baslangic"
             st.success("🎯 Başlangıç değerlendirmesi tamamlandı!")
-            st.balloons()
             time.sleep(2)
             st.rerun()
 
 def seans_yonetim():
-    """5 dakikalık seans yönetimi"""
-    
-    # Seans başlangıç kontrolü
+    """Seans yönetimi"""
+    # Session state başlangıç
     if "seans_baslangic_zamani" not in st.session_state:
         st.session_state.seans_baslangic_zamani = datetime.now()
         st.session_state.seans_konusmalari = []
         st.session_state.kullanici_konusma_sirasi = True
         st.session_state.konusma_sayisi = 0
     
-    # Seans süresi hesaplama
+    # Süre hesaplama
     gecen_sure = (datetime.now() - st.session_state.seans_baslangic_zamani).total_seconds()
-    kalan_sure = max(0, 300 - gecen_sure)  # 5 dakika = 300 saniye
+    kalan_sure = max(0, 300 - gecen_sure)
     
-    # Seans bitişi kontrolü
     if kalan_sure <= 0:
         st.session_state.seans_asamasi = "seans_analiz"
         st.rerun()
     
-    # Süresi gösteren header
     dakika = int(kalan_sure // 60)
     saniye = int(kalan_sure % 60)
     
@@ -511,59 +348,43 @@ def seans_yonetim():
         st.warning(f"🧠 **KLİNİK DEĞERLENDİRME** ⏰ {dakika}:{saniye:02d}")
         st.info("✨ **Dr. Marcus Reed analiz yapıyor** - Profesyonel görüş hazırlanıyor")
     
-    # Seans aşama göstergesi
     progress = (st.session_state.konusma_sayisi + 1) / 5
     st.progress(progress, f"Değerlendirme Aşaması: {st.session_state.konusma_sayisi + 1}/5")
     
-    # Streamlit session başlangıçlarını garantiye al
-    if "kullanici_konusma_sirasi" not in st.session_state:
-        st.session_state.kullanici_konusma_sirasi = True
-
-    if "konusma_sayisi" not in st.session_state:
-        st.session_state.konusma_sayisi = 0
-
-    if "seans_konusmalari" not in st.session_state:
-        st.session_state.seans_konusmalari = []
-
     if st.session_state.kullanici_konusma_sirasi:
         st.markdown("### ✍️ Yanıtınızı Yazın")
-        st.info("💡 **İpucu:** Samimi ve açık bir dille yazın.")
-
         with st.form(f"konusma_formu_{st.session_state.konusma_sayisi}"):
             kullanici_mesaji = st.text_area(
                 "💭 Düşüncelerinizi paylaşın:",
                 placeholder="Bu konuda ne düşünüyorsunuz?",
-                height=120,
-                key=f"mesaj_{st.session_state.konusma_sayisi}"
+                height=120
             )
-
             konusma_gonder = st.form_submit_button("📤 Gönder")
-
-            if konusma_gonder:
+            
+            if konusma_gonder and kullanici_mesaji.strip():
                 if len(kullanici_mesaji.strip()) < 10:
                     st.error("Lütfen daha detaylı bir yanıt verin")
-                    st.stop()
-
+                    return
+                
                 st.session_state.mevcut_kullanici_konusma = kullanici_mesaji
                 st.session_state.kullanici_konusma_sirasi = False
                 st.rerun()
-
     else:
         st.markdown("### 🤖 Dr. Marcus Reed Değerlendirme Yapıyor")
-
+        
         if "ai_cevap_uretti" not in st.session_state:
             with st.spinner("🧠 Klinik analiz hazırlanıyor..."):
                 ai_cevap_uret()
-
             st.session_state.ai_cevap_uretti = True
-
+        
         if st.button("➡️ Bir Sonraki Aşama", use_container_width=True, type="primary"):
             st.session_state.kullanici_konusma_sirasi = True
             st.session_state.konusma_sayisi += 1
-            del st.session_state.ai_cevap_uretti
+            if "ai_cevap_uretti" in st.session_state:
+                del st.session_state.ai_cevap_uretti
             st.rerun()
-
-    # Geçmiş konuşmaları göster
+    
+    # Konuşma geçmişi
     if st.session_state.seans_konusmalari:
         st.markdown("### 📋 Değerlendirme Süreci")
         for i, konusma in enumerate(reversed(st.session_state.seans_konusmalari[-2:])):
@@ -572,59 +393,41 @@ def seans_yonetim():
                 st.markdown(f"**🧠 Dr. Marcus Reed:** {konusma['ai']}")
 
 def ai_cevap_uret():
-    """AI'ın korumalı cevap üretmesi"""
+    """AI cevap üret"""
     if "mevcut_kullanici_konusma" not in st.session_state:
         st.warning("❗ Kullanıcı konuşması bulunamadı.")
         return
-
-    if "mevcut_problem" not in st.session_state:
-        st.warning("❗ Problem tanımlanmadan değerlendirme yapılamaz.")
-        return
-
+    
     kullanici_metni = st.session_state.mevcut_kullanici_konusma
     problem_bilgisi = st.session_state.mevcut_problem
     konusma_gecmisi = st.session_state.seans_konusmalari
-
-    # AI cevap üret
+    
     ai_cevabi = ai_psikolog_cevap_uret(
         kullanici_metni,
         problem_bilgisi,
         konusma_gecmisi,
         st.session_state.konusma_sayisi
     )
-
+    
     st.success("🧠 **DR. MARCUS REED'DEN PROFESYONEL GÖRÜŞ:**")
     st.markdown(f"*{ai_cevabi}*")
-
-    # Sesli yanıt
-    try:
-        with st.spinner("🔊 Dr. Marcus Reed seslendiriyor..."):
-            ses_baytlari = metinden_sese_openai(ai_cevabi)
-            if ses_baytlari:
-                ses_baytlarini_cal(ses_baytlari)
-                st.success("🎵 Sesli yanıt hazır!")
-            else:
-                st.info("📝 Yazılı yanıt hazır")
-    except Exception as e:
-        st.warning(f"Ses hatası: {e}")
-
-    # Konuşma kaydet
+    
     st.session_state.seans_konusmalari.append({
         "kullanici": kullanici_metni,
         "ai": ai_cevabi,
         "zaman": datetime.now().isoformat()
     })
-
+    
     del st.session_state.mevcut_kullanici_konusma
 
 def seans_analiz_goster():
-    """Korumalı klinik analiz raporu"""
+    """Analiz raporu"""
     st.markdown("## 📋 KLİNİK DEĞERLENDİRME RAPORU")
     st.caption("Dr. Marcus Reed Protokolü ile Hazırlanmıştır")
     
     if "seans_analizi" not in st.session_state:
         with st.spinner("🧠 Kapsamlı klinik analiz yapılıyor..."):
-            time.sleep(4)
+            time.sleep(3)
             analiz = seans_analizi_yap(
                 st.session_state.mevcut_problem,
                 st.session_state.seans_konusmalari
@@ -633,80 +436,41 @@ def seans_analiz_goster():
     
     analiz = st.session_state.seans_analizi
     
-    # Profesyonel rapor sunumu
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # Klinik tanı
         st.markdown("### 🎯 KLİNİK TANI")
-        if analiz.get("klinik_tani"):
-            st.error(f"**📋 TANI:** {analiz['klinik_tani']}")
+        st.error(f"**📋 TANI:** {analiz['klinik_tani']}")
         
-        # Semptom profili
-        if analiz.get("semptom_profili"):
-            st.markdown("### 🔍 SEMPTOM PROFİLİ")
-            st.info(analiz["semptom_profili"])
+        st.markdown("### 💊 ÖNERİLEN TEDAVİ")
+        st.success(f"**Protokol:** {analiz['tedavi_plani']}")
         
-        # Mental status
-        if analiz.get("mental_status"):
-            st.markdown("### 🧠 MENTAL STATUS")
-            st.write(analiz["mental_status"])
-        
-        # Tedavi planı
-        if analiz.get("tedavi_plani"):
-            st.markdown("### 💊 ÖNERİLEN TEDAVİ")
-            st.success(f"**Protokol:** {analiz['tedavi_plani']}")
-        
-        # Klinik öneriler
         st.markdown("### 📝 UZMAN ÖNERİLERİ")
         for i, oneri in enumerate(analiz["oneriler"], 1):
             st.write(f"**{i}.** {oneri}")
         
-        # Kapsamlı değerlendirme
         st.markdown("### 📊 GENEL DEĞERLENDİRME")
         st.write(analiz["degerlendirme"])
     
     with col2:
         st.markdown("### 📈 KLİNİK SKORLAR")
         
-        # Stres seviyesi
         stres_renk = "🟢" if analiz["stres_seviyesi"] <= 3 else "🟡" if analiz["stres_seviyesi"] <= 6 else "🔴"
         st.metric("Stres Seviyesi", f"{stres_renk} {analiz['stres_seviyesi']}/10")
         
-        # Ruh hali
-        ruh_hali_emoji = {
-            "anxious": "😰", "depressed": "😔", "stable": "😐", 
-            "elevated": "😊", "dysthymic": "😑"
-        }
+        ruh_hali_emoji = {"anxious": "😰", "depressed": "😔", "stable": "😐"}
         emoji = ruh_hali_emoji.get(analiz["ruh_hali"], "🧠")
         st.metric("Mental Durum", f"{emoji} {analiz['ruh_hali'].title()}")
-        
-        # Prognoz
-        if analiz.get("prognoz"):
-            prognoz_emoji = "🏆" if "good" in analiz["prognoz"].lower() else "📋"
-            st.metric("Prognoz", f"{prognoz_emoji} {analiz['prognoz']}")
-        
-        # Aciliyet durumu
-        if analiz["aciliyet"] == "yuksek":
-            st.error("⚠️ Yüksek Öncelik")
-        elif analiz["aciliyet"] == "orta":
-            st.warning("📋 Rutin Takip")
-        else:
-            st.success("✅ Düşük Risk")
         
         st.metric("Değerlendirme", "🏆 Tamamlandı")
     
     st.markdown("---")
     
-    # Son butonlar
     col_a, col_b = st.columns(2)
-    
     with col_a:
         if st.button("📋 Raporu Kaydet", use_container_width=True, type="primary"):
             seans_kaydet()
             st.success("✅ Klinik rapor kaydedildi!")
-            st.balloons()
-            time.sleep(2)
             seans_sifirla()
             st.rerun()
     
@@ -717,7 +481,7 @@ def seans_analiz_goster():
             st.rerun()
 
 def seans_kaydet():
-    """Seansı kullanıcı verisine kaydet"""
+    """Seans kaydet"""
     kullanici_data = st.session_state.kullanici_data
     
     yeni_seans = {
@@ -766,15 +530,11 @@ def kullanici_profil():
         kayit_tarihi = datetime.fromisoformat(kullanici_data["kayit_tarihi"])
         st.metric("📅 Üyelik", kayit_tarihi.strftime("%d.%m.%Y"))
     
-    # Motivasyon mesajı
     if kullanici_data["profil"]["toplam_seans"] == 0:
         st.info("🌟 **İlk profesyonel değerlendirmeniz için hazır mısınız?**")
-    elif kullanici_data["profil"]["toplam_seans"] < 3:
-        st.success(f"📈 **{kullanici_data['profil']['toplam_seans']} değerlendirme tamamladınız!**")
     else:
-        st.success(f"🏆 **{kullanici_data['profil']['toplam_seans']} değerlendirme! Harika ilerleme!**")
+        st.success(f"🏆 **{kullanici_data['profil']['toplam_seans']} değerlendirme tamamladınız!**")
     
-    # Geçmiş seanslar
     if kullanici_data["seanslar"]:
         st.markdown("### 📚 Değerlendirme Geçmişi")
         
@@ -794,8 +554,6 @@ def kullanici_profil():
                 
                 with col_b:
                     st.write(f"**💬 Etkileşim:** {len(seans['konusmalar'])}")
-                    if 'prognoz' in seans['analiz']:
-                        st.write(f"**📈 Prognoz:** {seans['analiz']['prognoz']}")
     else:
         st.info("🚀 **Henüz değerlendirme yapmadınız. İlk seansınıza başlayın!**")
 
@@ -815,20 +573,19 @@ def main():
     </h3>
     """, unsafe_allow_html=True)
     
-    # Güvenlik uyarısı
     st.info("🔒 **Güvenli Platform:** Tüm verileriniz şifrelenir ve gizli tutulur")
     
     # OpenAI başlat
     if not openai_baslat():
         st.error("❌ Sistem yapılandırması gerekli")
-        st.info("API bağlantısı kurulamadı. Lütfen yönetici ile iletişime geçin.")
+        st.info("API bağlantısı kurulamadı. Lütfen Streamlit Cloud Secrets'da OPENAI_API_KEY ayarlayın.")
         st.stop()
     
-    # Session state başlangıç değerleri
+    # Session state başlangıç
     if "giris_yapildi" not in st.session_state:
         st.session_state.giris_yapildi = False
     
-    # Giriş yapılmamış durumda
+    # Giriş yapılmamış
     if not st.session_state.giris_yapildi:
         tab1, tab2 = st.tabs(["🔐 Giriş", "📝 Kayıt"])
         
