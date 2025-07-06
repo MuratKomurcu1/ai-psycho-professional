@@ -1,10 +1,9 @@
 import streamlit as st
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import hashlib
-import base64
 
 # OpenAI import
 try:
@@ -43,14 +42,6 @@ def openai_baslat():
     else:
         st.error("❌ OpenAI API anahtarı bulunamadı! Lütfen Streamlit Cloud Secrets'da OPENAI_API_KEY ayarlayın.")
     return False
-
-def get_system_prompts():
-    """Sistem promptları"""
-    return {
-        "ilk_seans": "Sen Dr. Marcus Reed - 20 yıllık deneyimli klinik psikolog. Hastayı karşıla, güven kur ve ilk değerlendirmeyi yap.",
-        "orta_seans": "Daha detaylı analiz yap. Semptomları keşfet ve tetikleyici faktörleri araştır.",
-        "son_seans": "Kapsamlı değerlendirme ve tedavi önerileri sun. Klinik rapor hazırla."
-    }
 
 def ai_psikolog_cevap_uret(kullanici_metni, problem_bilgisi, konusma_gecmisi, konusma_sirasi):
     """AI psikolog cevap üretici"""
@@ -171,7 +162,7 @@ def parse_analiz(analiz_metni):
 def basit_analiz_sonucu():
     """Basit analiz sonucu"""
     return {
-        "klinik_tani": "Genel Adaptation Zorluğu",
+        "klinik_tani": "Genel Adaptasyon Zorluğu",
         "stres_seviyesi": 5,
         "ruh_hali": "stable",
         "tedavi_plani": "Supportif terapi ve stres yönetimi",
@@ -315,7 +306,7 @@ def problem_tanımlama():
             
             st.session_state.seans_asamasi = "seans_baslangic"
             st.success("🎯 Başlangıç değerlendirmesi tamamlandı!")
-            time.sleep(2)
+            time.sleep(1)
             st.rerun()
 
 def seans_yonetim():
@@ -331,7 +322,7 @@ def seans_yonetim():
     gecen_sure = (datetime.now() - st.session_state.seans_baslangic_zamani).total_seconds()
     kalan_sure = max(0, 300 - gecen_sure)
     
-    if kalan_sure <= 0:
+    if kalan_sure <= 0 or st.session_state.konusma_sayisi >= 5:
         st.session_state.seans_asamasi = "seans_analiz"
         st.rerun()
     
@@ -348,7 +339,7 @@ def seans_yonetim():
         st.warning(f"🧠 **KLİNİK DEĞERLENDİRME** ⏰ {dakika}:{saniye:02d}")
         st.info("✨ **Dr. Marcus Reed analiz yapıyor** - Profesyonel görüş hazırlanıyor")
     
-    progress = (st.session_state.konusma_sayisi + 1) / 5
+    progress = min((st.session_state.konusma_sayisi + 1) / 5, 1.0)
     st.progress(progress, f"Değerlendirme Aşaması: {st.session_state.konusma_sayisi + 1}/5")
     
     if st.session_state.kullanici_konusma_sirasi:
@@ -471,6 +462,7 @@ def seans_analiz_goster():
         if st.button("📋 Raporu Kaydet", use_container_width=True, type="primary"):
             seans_kaydet()
             st.success("✅ Klinik rapor kaydedildi!")
+            st.balloons()
             seans_sifirla()
             st.rerun()
     
